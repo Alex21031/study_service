@@ -1,0 +1,25 @@
+{
+  "name": "major-study-helper",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A TypeScript and Firebase study assistant for international students.",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "workspaces": [
+    "apps/web",
+    "functions",
+    "shared"
+  ],
+  "scripts": {
+    "dev": "npm --workspace apps/web run dev",
+    "build": "npm --workspace apps/web run build && npm --workspace functions run build",
+    "typecheck": "npm --workspace apps/web run typecheck && npm --workspace functions run build",
+    "emulators": "firebase emulators:start",
+    "deploy": "firebase deploy"
+  },
+  "devDependencies": {
+    "firebase-tools": "latest",
+    "typescript": "6.0.3"
+  }
+}

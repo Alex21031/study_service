@@ -1,0 +1,13 @@
+.DS_Store
+.env
+.env.local
+.env.*.local
+.firebase/
+.next/
+.tools/
+coverage/
+dist/
+lib/
+node_modules/
+*.log
+*.tsbuildinfo

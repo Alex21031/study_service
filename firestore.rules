@@ -1,0 +1,98 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function ownsUserDoc(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function ownsLecture(lectureId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/lectures/$(lectureId))
+        && get(/databases/$(database)/documents/lectures/$(lectureId)).data.userId == request.auth.uid;
+    }
+
+    function validLectureCreate() {
+      return signedIn()
+        && request.resource.data.keys().hasOnly([
+          "userId",
+          "title",
+          "courseName",
+          "audioPath",
+          "status",
+          "transcript",
+          "summaryOriginal",
+          "summaryRussian",
+          "keyTerms",
+          "createdAt",
+          "updatedAt"
+        ])
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.title is string
+        && request.resource.data.courseName is string
+        && request.resource.data.audioPath is string
+        && request.resource.data.status in ["uploaded", "ready"]
+        && request.resource.data.keyTerms is list
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp;
+    }
+
+    function validQuizCreate(lectureId) {
+      return ownsLecture(lectureId)
+        && request.resource.data.keys().hasOnly([
+          "lectureId",
+          "type",
+          "question",
+          "options",
+          "answer",
+          "explanation",
+          "difficulty",
+          "createdAt"
+        ])
+        && request.resource.data.lectureId == lectureId
+        && request.resource.data.type in ["multiple_choice", "short_answer", "blank"]
+        && request.resource.data.question is string
+        && request.resource.data.options is list
+        && request.resource.data.answer is string
+        && request.resource.data.explanation is string
+        && request.resource.data.difficulty in ["easy", "medium", "hard"]
+        && request.resource.data.createdAt is timestamp;
+    }
+
+    function validLectureUpdate() {
+      return signedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "title",
+          "courseName",
+          "updatedAt"
+        ]);
+    }
+
+    match /users/{userId} {
+      allow read, create, update, delete: if ownsUserDoc(userId);
+    }
+
+    match /lectures/{lectureId} {
+      allow read, delete: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if validLectureCreate();
+      allow update: if validLectureUpdate();
+
+      match /quizzes/{quizId} {
+        allow read: if ownsLecture(lectureId);
+        allow create: if validQuizCreate(lectureId);
+        allow update, delete: if false;
+      }
+    }
+
+    match /quizAttempts/{attemptId} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+  }
+}

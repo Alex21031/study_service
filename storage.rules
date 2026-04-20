@@ -1,0 +1,21 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    match /audio/{userId}/{lectureId}/{fileName} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow write: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.size < 250 * 1024 * 1024
+        && request.resource.contentType.matches("audio/.*");
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
