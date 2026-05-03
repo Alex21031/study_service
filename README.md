@@ -34,8 +34,29 @@ For recording transcription and AI summaries, add a Gemini API key to `apps/web/
 
 ```txt
 GEMINI_API_KEY=your_server_only_key
-GEMINI_STUDY_MODEL=gemini-2.5-flash
+GEMINI_STUDY_MODEL=gemini-3-flash-preview
 ```
+
+For local speech-to-text, install OpenAI Whisper and ffmpeg on the machine running the Next.js server:
+
+```bash
+python3 -m pip install git+https://github.com/openai/whisper.git
+brew install ffmpeg
+```
+
+Optional Whisper settings in `apps/web/.env.local`:
+
+```txt
+WHISPER_PYTHON_BIN=python3
+WHISPER_PATH_PREFIX=
+WHISPER_MODEL=turbo
+WHISPER_LANGUAGE=
+WHISPER_CHUNK_SECONDS=600
+WHISPER_TIMEOUT_MS=900000
+WHISPER_TOTAL_TIMEOUT_MS=7200000
+```
+
+For one-hour lectures, keep `WHISPER_MODEL=turbo` and process audio in chunks. The default `WHISPER_CHUNK_SECONDS=600` splits long recordings into 10-minute WAV chunks, loads Whisper once, transcribes each chunk in order, and joins the transcript before Gemini creates study materials.
 
 ## Development
 
@@ -68,7 +89,7 @@ npm run build
 
 The local recording MVP uses `apps/web/app/api/lectures/process-audio/route.ts`.
 
-That route sends temporary audio to Gemini, asks for a transcript, Russian summary, key terms, and quizzes, then stores only the resulting text data in Firestore. The audio file is not persisted.
+That route sends temporary audio to local OpenAI Whisper for transcription, asks Gemini for a Russian summary, key terms, and quizzes from the transcript, then stores the resulting study data in Firestore.
 
 ## Data Flow
 

@@ -181,3 +181,85 @@
 - Amended the local commit to `f08ba4c` after recording the GitHub commit review.
 - Added GitHub remote `origin` as `https://github.com/Alex21031/study_service.git`.
 - Push is blocked because this terminal has no GitHub HTTPS credentials configured: `could not read Username for 'https://github.com': Device not configured`.
+
+## Whisper Transcription Migration Plan
+
+- [x] Add a server-only OpenAI Whisper transcription helper that runs the local Python Whisper package against temporary audio files.
+- [x] Replace CLOVA usage in full lecture processing with Whisper transcripts feeding Gemini study-material generation.
+- [x] Route the transcription-only button to the Whisper-backed transcription endpoint.
+- [x] Update environment examples and setup docs from NAVER CLOVA Speech to local Whisper requirements.
+- [x] Verify touched-file diffs, TypeScript checks, and the best available local Whisper smoke test.
+
+## Whisper Transcription Migration Review
+
+- Added a server-only Whisper transcription helper that writes uploaded audio to a temp file and invokes local Python OpenAI Whisper.
+- Replaced the transcription-only `/api/lectures/transcribe-audio` route with Whisper-backed transcription.
+- Replaced full lecture processing transcription with Whisper, while keeping Gemini for Russian summaries, key terms, and quizzes.
+- Removed the CLOVA transcription API route and removed CLOVA env examples from docs.
+- Updated `.gitignore` so source files under `apps/web/lib` are no longer hidden by the broad `lib/` ignore pattern.
+- Verified tracked touched-file diffs with `git diff -- ...`.
+- Verified new/untracked `apps/web/lib` files with `git diff --no-index` because that directory was not previously tracked by Git.
+- `npm run typecheck` passed using the local Node binary in `.tools/node-v24.15.0-darwin-arm64/bin`.
+- `npm run build` passed using the same local Node binary.
+- `python3 -c "import whisper"` failed because OpenAI Whisper is not installed in the current shell.
+- `ffmpeg -version` failed because ffmpeg is not installed in the current shell.
+- `POST /api/lectures/transcribe-audio` with a generated WAV returned `501` and the expected Whisper installation guidance.
+
+## Local Whisper Runtime Setup Plan
+
+- [x] Create a project-local Python virtual environment for Whisper under `.tools/whisper-venv`.
+- [x] Install OpenAI Whisper and a local ffmpeg binary provider into the virtual environment.
+- [x] Expose the local ffmpeg binary through `.tools/bin/ffmpeg` so Whisper can decode audio without Homebrew.
+- [x] Update the server helper and local env so Next.js uses the project-local Whisper runtime.
+- [x] Verify with import checks, ffmpeg checks, typecheck/build, and an API smoke test.
+
+## Local Whisper Runtime Setup Review
+
+- Created `.tools/whisper-venv` with Python 3.9 and installed `openai-whisper==20250625`, `torch==2.8.0`, and `imageio-ffmpeg==0.6.0`.
+- Added `/Users/alex/.major-study-helper/bin/python3` and `/Users/alex/.major-study-helper/bin/ffmpeg` runtime wrappers so Turbopack does not inspect project-internal Python symlinks during build.
+- Updated `apps/web/.env.local` without printing secrets: `WHISPER_PYTHON_BIN=python3`, `WHISPER_PATH_PREFIX=/Users/alex/.major-study-helper/bin`, `WHISPER_MODEL=tiny`, and `WHISPER_TIMEOUT_MS=300000`.
+- Updated the Whisper helper to prepend `WHISPER_PATH_PREFIX` to the Python child process PATH.
+- Verified Whisper import: `.tools/whisper-venv/bin/python -c "import whisper"` reported version `20250625`.
+- Verified local ffmpeg: `.tools/bin/ffmpeg -version` reported ffmpeg `7.1`.
+- `npm run typecheck` passed using local Node from `.tools/node-v24.15.0-darwin-arm64/bin`.
+- `npm run build` passed after removing build-time project `.tools` path probing from the helper.
+- Started the Next.js dev server at `http://localhost:3001`.
+- `POST /api/lectures/transcribe-audio` with an English macOS `say` AIFF test returned HTTP `200` and transcript `This is a local whisper transcription test for the study helper app.`
+
+## Long Lecture Whisper Plan
+
+- [x] Add ffmpeg audio chunking so long lectures are split before Whisper transcription.
+- [x] Transcribe chunks sequentially and join transcripts in order.
+- [x] Add environment controls for chunk length, total timeout, and per-chunk timeout.
+- [x] Update docs and env examples for one-hour lecture settings.
+- [x] Verify with typecheck/build and a forced multi-chunk API smoke test.
+
+## Long Lecture Whisper Review
+
+- Added ffmpeg-based audio splitting before Whisper transcription.
+- Long audio is converted into mono 16 kHz WAV chunks using `WHISPER_CHUNK_SECONDS`, defaulting to 600 seconds.
+- Whisper now loads the selected model once per request and transcribes all chunk paths in order, then joins non-empty chunk transcripts.
+- Added `WHISPER_CHUNK_SECONDS` and `WHISPER_TOTAL_TIMEOUT_MS` to env examples and README.
+- Updated local `apps/web/.env.local` without printing secrets: `WHISPER_MODEL=turbo`, `WHISPER_CHUNK_SECONDS=600`, `WHISPER_TIMEOUT_MS=900000`, and `WHISPER_TOTAL_TIMEOUT_MS=7200000`.
+- `npm run typecheck` passed using local Node from `.tools/node-v24.15.0-darwin-arm64/bin`.
+- `npm run build` passed.
+- Forced multi-chunk smoke test passed by starting the dev server with `WHISPER_CHUNK_SECONDS=60` and posting a 65-second WAV to `/api/lectures/transcribe-audio`; the API returned HTTP `200` with a joined transcript.
+- Restarted the normal dev server at `http://localhost:3001` with the 10-minute chunk setting from `apps/web/.env.local`.
+
+## Streaming Transcription Plan
+
+- [x] Stream Whisper chunk results from `/api/lectures/transcribe-audio?stream=1` as newline-delimited JSON.
+- [x] Keep the existing JSON response path for non-streaming callers such as full lecture processing.
+- [x] Update the transcription-only client request to read the stream and append chunk text live.
+- [x] Verify typecheck/build and an API streaming smoke test with forced multi-chunk audio.
+
+## Streaming Transcription Review
+
+- Added `/api/lectures/transcribe-audio?stream=1` streaming output using newline-delimited JSON.
+- Streaming responses emit `chunk` events as each Whisper chunk completes and a final `done` event with the joined transcript.
+- Kept the non-streaming JSON path intact for callers that need one final transcript.
+- Updated the transcription-only client flow to read the stream and append chunk text into the transcript textarea as chunks arrive.
+- `npm run typecheck` passed using local Node from `.tools/node-v24.15.0-darwin-arm64/bin`.
+- `npm run build` passed.
+- Forced multi-chunk streaming smoke test passed with `WHISPER_CHUNK_SECONDS=60`; curl received chunk `0`, chunk `1`, and final `done` NDJSON events from `/api/lectures/transcribe-audio?stream=1`.
+- Restarted the normal dev server at `http://localhost:3001`.

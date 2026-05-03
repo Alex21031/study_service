@@ -289,10 +289,15 @@ export function LectureUploader({ userId }: LectureUploaderProps) {
     setTranscribing(true);
 
     try {
+      const transcriptChunks: string[] = [];
       const transcript = await transcribeLectureAudio({
         title: title.trim() || "Untitled lecture",
         courseName: courseName.trim() || "Course",
-        audio: recordedAudio
+        audio: recordedAudio,
+        onTranscriptChunk: (chunk) => {
+          transcriptChunks[chunk.index] = chunk.transcript;
+          setTranscriptText(transcriptChunks.filter(Boolean).join("\n\n"));
+        }
       });
 
       setTranscriptText(transcript);
