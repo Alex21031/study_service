@@ -1,16 +1,13 @@
 "use client";
 
 import { StudyWorkspace } from "@/components/StudyWorkspace";
-import { getFirebaseServices, hasFirebaseConfig } from "@/lib/firebase";
-import { createUserProfile } from "@/lib/lectures";
 import {
-  createUserWithEmailAndPassword,
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signOut,
-  updateProfile,
-  type User
-} from "firebase/auth";
+  fetchCurrentUser,
+  signInWithBackend,
+  signOutFromBackend,
+  signUpWithBackend,
+  type AuthUser
+} from "@/lib/backend";
 import { FormEvent, useEffect, useState } from "react";
 
 type AuthMode = "signin" | "signup";
@@ -18,19 +15,19 @@ type AuthMode = "signin" | "signup";
 function getAuthErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : "Authentication failed.";
 
-  if (message.includes("auth/configuration-not-found")) {
-    return "Firebase Authentication 설정을 찾을 수 없습니다. Firebase Console에서 Authentication을 시작하고 Email/Password 제공자를 활성화해 주세요.";
+  if (message.includes("Failed to fetch")) {
+    return "백엔드 서버에 연결할 수 없습니다. StudyService_back가 실행 중인지 확인해 주세요.";
   }
 
-  if (message.includes("auth/email-already-in-use")) {
+  if (message.includes("Email already registered")) {
     return "이미 가입된 이메일입니다. 로그인 탭에서 다시 시도해 주세요.";
   }
 
-  if (message.includes("auth/invalid-credential")) {
+  if (message.includes("Incorrect email or password")) {
     return "이메일 또는 비밀번호가 올바르지 않습니다.";
   }
 
-  if (message.includes("auth/weak-password")) {
+  if (message.includes("password")) {
     return "비밀번호는 6자 이상이어야 합니다.";
   }
 
@@ -38,7 +35,7 @@ function getAuthErrorMessage(error: unknown) {
 }
 
 export function AuthGate() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState<AuthMode>("signin");
   const [displayName, setDisplayName] = useState("");
@@ -48,18 +45,32 @@ export function AuthGate() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!hasFirebaseConfig()) {
-      setError("Firebase 환경 변수가 없습니다. .env.example을 .env.local로 복사한 뒤 값을 채워 주세요.");
-      setLoading(false);
-      return undefined;
-    }
+    let isMounted = true;
 
-    const { auth } = getFirebaseServices();
+    void fetchCurrentUser()
+      .then((nextUser) => {
+        if (!isMounted) {
+          return;
+        }
 
-    return onAuthStateChanged(auth, (nextUser) => {
-      setUser(nextUser);
-      setLoading(false);
-    });
+        setUser(nextUser);
+      })
+      .catch((authError) => {
+        if (!isMounted) {
+          return;
+        }
+
+        setError(getAuthErrorMessage(authError));
+      })
+      .finally(() => {
+        if (isMounted) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -68,16 +79,21 @@ export function AuthGate() {
     setSubmitting(true);
 
     try {
-      const { auth } = getFirebaseServices();
-
+      let nextUser: AuthUser;
       if (mode === "signup") {
-        const credential = await createUserWithEmailAndPassword(auth, email, password);
-        const name = displayName.trim() || email.split("@")[0];
-        await updateProfile(credential.user, { displayName: name });
-        await createUserProfile(credential.user.uid, name, credential.user.email ?? email);
+        nextUser = await signUpWithBackend(email, password);
+        if (displayName.trim()) {
+          nextUser = {
+            ...nextUser,
+            displayName: displayName.trim()
+          };
+        }
       } else {
-        await signInWithEmailAndPassword(auth, email, password);
+        nextUser = await signInWithBackend(email, password);
       }
+
+      setUser(nextUser);
+      setPassword("");
     } catch (authError) {
       setError(getAuthErrorMessage(authError));
     } finally {
@@ -96,7 +112,15 @@ export function AuthGate() {
   }
 
   if (user) {
-    return <StudyWorkspace user={user} onSignOut={() => signOut(getFirebaseServices().auth)} />;
+    return (
+      <StudyWorkspace
+        user={user}
+        onSignOut={() => {
+          signOutFromBackend();
+          setUser(null);
+        }}
+      />
+    );
   }
 
   return (

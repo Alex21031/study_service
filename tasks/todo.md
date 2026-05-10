@@ -263,3 +263,75 @@
 - `npm run build` passed.
 - Forced multi-chunk streaming smoke test passed with `WHISPER_CHUNK_SECONDS=60`; curl received chunk `0`, chunk `1`, and final `done` NDJSON events from `/api/lectures/transcribe-audio?stream=1`.
 - Restarted the normal dev server at `http://localhost:3001`.
+
+## Python Migration and Merge Plan
+
+- [x] Inspect `Project` and `StudyService_back` to inventory current features, storage, auth, and AI integrations.
+- [x] Lock the migration target architecture and document the assumptions for what "convert to Python" means.
+- [x] Extend `StudyService_back` data models and schemas for lectures, key terms, quizzes, and quiz attempts.
+- [x] Port the lecture transcription and study-material generation pipeline from Next.js routes to FastAPI services.
+- [x] Add authenticated FastAPI endpoints for lecture create/list/detail, transcription-only streaming, and full lecture processing.
+- [x] Replace Firebase/Firestore-dependent web data flows with calls to the merged FastAPI backend.
+- [x] Preserve the existing `StudyService_back` features: auth, study-plan, email-translate, and solve-problem.
+- [x] Verify the merged app locally with touched-file diffs plus relevant backend/frontend build or test commands.
+- [x] Merge the completed work into the local `StudyService_back` repo state.
+- [x] Push the merged result to `https://github.com/Alex21031/StudyService_back.git`.
+
+## Python Migration and Merge Spec
+
+- Source app in `Project`:
+  lecture recording/upload UI, transcription-only flow, full lecture processing, lecture history, transcript view, Korean/original summary, Russian summary, key terms, and quizzes.
+- Existing backend in `StudyService_back`:
+  FastAPI app with JWT auth, SQLite via SQLAlchemy, and Gemini-backed study-plan, translation, and guided problem-solving features.
+- Working assumption for phase 1:
+  "Convert the features to Python" means migrating the server/business logic from Firebase Functions and Next.js API routes into FastAPI inside `StudyService_back`, while keeping the existing Next.js client until a separate frontend rewrite is explicitly requested.
+- Why this assumption:
+  the current browser app cannot become "all Python" without a full UI rewrite to a different stack such as Django templates, HTMX, or Streamlit, which is a separate architectural project with product tradeoffs.
+- Migration target:
+  `StudyService_back` becomes the single backend for auth, lecture processing, quiz data, study plans, translation, and problem solving.
+- Planned backend replacements:
+  Firebase Auth -> existing JWT auth in `StudyService_back`
+  Firestore lecture and quiz documents -> SQLAlchemy models and FastAPI endpoints
+  Next.js `/api/lectures/*` routes -> FastAPI lecture routes and Python services
+  Whisper subprocess and Gemini study-pack generation -> reused in Python-native services
+- Open design decisions to resolve during implementation:
+  whether to keep NCP Object Storage for lecture audio or first store files locally,
+  whether the Next.js frontend should be adapted incrementally or replaced later,
+  whether Firebase user identities need migration or the merged app should use only FastAPI auth going forward.
+
+## Python Migration and Merge Review
+
+- Discovery completed and the phase-1 architecture was locked to "Python backend migration, existing test frontend retained".
+- Added lecture persistence models, response schemas, a Whisper/Gemini lecture service, and FastAPI lecture routes inside `StudyService_back`.
+- Verified Python syntax with `python3 -m compileall StudyService_back`.
+- Verified app wiring in a temporary virtualenv with FastAPI `TestClient`: `/health` returned `200`, `/lectures` returned `401` without auth, `/lectures/transcribe-audio` returned `422` without a file, `/study-plan` returned `200`, and existing Gemini-backed routes stayed mounted and returned `503` without `GEMINI_API_KEY`.
+- Committed the backend merge in `StudyService_back` as `447b27b` with message `Add lecture processing backend`.
+- Pushed `main` to `https://github.com/Alex21031/StudyService_back.git`.
+- The test frontend now talks directly to the merged FastAPI backend instead of Firebase Auth and Firestore.
+
+## FastAPI Frontend Integration Plan
+
+- [x] Inspect the current web auth and lecture flows to identify Firebase-specific dependencies.
+- [x] Add a small frontend API/auth client for the merged FastAPI backend, including token persistence and current-user loading.
+- [x] Replace Firebase auth usage in `AuthGate.tsx` with backend signup/signin/signout flows.
+- [x] Replace Firestore-based lecture list and quiz loading with backend fetch calls and refresh hooks.
+- [x] Update lecture upload/transcription actions to call the FastAPI lecture endpoints directly.
+- [x] Add direct frontend test panels for study-plan, email-translate, and solve-problem.
+- [x] Update environment examples and local defaults for the backend base URL.
+- [x] Verify touched-file diffs and run the relevant frontend typecheck/build commands.
+
+## FastAPI Frontend Integration Review
+
+- Added `apps/web/lib/backend.ts` for backend base URL resolution, JWT token storage, authenticated fetches, and helper calls for auth, study plans, translation, and problem-solving sessions.
+- Replaced Firebase auth in `AuthGate.tsx` with backend session loading, signup, signin, and local signout.
+- Replaced Firestore lecture listeners with backend fetch calls in `apps/web/lib/lectures.ts` and `StudyWorkspace.tsx`.
+- Kept the lecture recording/upload UI, but now lecture processing and transcription call the FastAPI backend directly.
+- Added `StudyServiceTools.tsx` so study-plan, email-translate, and solve-problem features can be exercised directly from the frontend.
+- Updated `apps/web/.env.example` for `NEXT_PUBLIC_API_BASE_URL` and added responsive UI styles for the new tool panels.
+- `npm --workspace apps/web run typecheck` passed.
+- `npm --workspace apps/web run build` passed.
+- Started `StudyService_back` locally at `http://127.0.0.1:8000`.
+- Started the Next.js frontend locally at `http://localhost:3000`.
+- `curl -I http://127.0.0.1:3000` returned `HTTP/1.1 200 OK`.
+- `curl http://127.0.0.1:8000/health` returned `{"status":"ok"}`.
+- Backend smoke tests passed through the running app: register/login, `/auth/me`, `/study-plan`, `/email-translate`, `/solve-problem/sessions`, and `/lectures/process-audio` all returned successful responses, and lecture listing reflected the created lecture.

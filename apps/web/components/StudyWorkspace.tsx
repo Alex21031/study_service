@@ -1,14 +1,15 @@
 "use client";
 
 import { LectureUploader } from "@/components/LectureUploader";
-import { listenToLectures, listenToQuizzes } from "@/lib/lectures";
+import { StudyServiceTools } from "@/components/StudyServiceTools";
+import type { AuthUser } from "@/lib/backend";
+import { fetchLectureDetail, fetchLectures } from "@/lib/lectures";
 import type { Lecture, QuizQuestion } from "@study-helper/shared/types";
-import type { User } from "firebase/auth";
 import { useEffect, useMemo, useState } from "react";
 
 interface StudyWorkspaceProps {
-  user: User;
-  onSignOut: () => Promise<void>;
+  user: AuthUser;
+  onSignOut: () => void;
 }
 
 const statusLabel: Record<Lecture["status"], string> = {
@@ -25,18 +26,37 @@ export function StudyWorkspace({ user, onSignOut }: StudyWorkspaceProps) {
   const [quizzes, setQuizzes] = useState<QuizQuestion[]>([]);
   const [selectedLectureId, setSelectedLectureId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [loadingLectures, setLoadingLectures] = useState(true);
+  const [loadingLectureDetail, setLoadingLectureDetail] = useState(false);
+
+  async function refreshLectures(preferredLectureId?: string) {
+    setLoadingLectures(true);
+
+    try {
+      const nextLectures = await fetchLectures();
+      setError("");
+      setLectures(nextLectures);
+      setSelectedLectureId((current) => {
+        if (preferredLectureId && nextLectures.some((lecture) => lecture.id === preferredLectureId)) {
+          return preferredLectureId;
+        }
+
+        if (current && nextLectures.some((lecture) => lecture.id === current)) {
+          return current;
+        }
+
+        return nextLectures[0]?.id ?? null;
+      });
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "강의 목록을 불러오지 못했습니다.");
+    } finally {
+      setLoadingLectures(false);
+    }
+  }
 
   useEffect(() => {
-    return listenToLectures(
-      user.uid,
-      (nextLectures) => {
-        setError("");
-        setLectures(nextLectures);
-        setSelectedLectureId((current) => current ?? nextLectures[0]?.id ?? null);
-      },
-      (listenError) => setError(listenError.message)
-    );
-  }, [user.uid]);
+    void refreshLectures();
+  }, [user.id]);
 
   useEffect(() => {
     if (!selectedLectureId) {
@@ -44,14 +64,37 @@ export function StudyWorkspace({ user, onSignOut }: StudyWorkspaceProps) {
       return undefined;
     }
 
-    return listenToQuizzes(
-      selectedLectureId,
-      (nextQuizzes) => {
+    let isMounted = true;
+    setLoadingLectureDetail(true);
+
+    void fetchLectureDetail(selectedLectureId)
+      .then(({ lecture, quizzes: nextQuizzes }) => {
+        if (!isMounted) {
+          return;
+        }
+
         setError("");
+        setLectures((currentLectures) =>
+          currentLectures.map((currentLecture) =>
+            currentLecture.id === lecture.id ? lecture : currentLecture
+          )
+        );
         setQuizzes(nextQuizzes);
-      },
-      (listenError) => setError(listenError.message)
-    );
+      })
+      .catch((loadError) => {
+        if (isMounted) {
+          setError(loadError instanceof Error ? loadError.message : "강의 상세 정보를 불러오지 못했습니다.");
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setLoadingLectureDetail(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, [selectedLectureId]);
 
   const selectedLecture = useMemo(
@@ -79,7 +122,7 @@ export function StudyWorkspace({ user, onSignOut }: StudyWorkspaceProps) {
 
         <div className="grid">
           <aside className="study-area">
-            <LectureUploader userId={user.uid} />
+            <LectureUploader onLectureProcessed={(lectureId) => refreshLectures(lectureId)} />
 
             <section className="panel">
               <div className="panel-header">
@@ -88,6 +131,8 @@ export function StudyWorkspace({ user, onSignOut }: StudyWorkspaceProps) {
               </div>
 
               <div className="lecture-list">
+                {loadingLectures ? <div className="empty-state">강의 목록을 불러오는 중입니다.</div> : null}
+
                 {lectures.map((lecture) => (
                   <button
                     className="lecture-card"
@@ -147,7 +192,9 @@ export function StudyWorkspace({ user, onSignOut }: StudyWorkspaceProps) {
                   <article>
                     <h3>전사 텍스트</h3>
                     <div className="text-box">
-                      {selectedLecture.transcript || "AI 전사가 완료되면 텍스트가 표시됩니다."}
+                      {loadingLectureDetail
+                        ? "강의 상세 정보를 불러오는 중입니다."
+                        : selectedLecture.transcript || "AI 전사가 완료되면 텍스트가 표시됩니다."}
                     </div>
                   </article>
                 </section>
@@ -206,6 +253,8 @@ export function StudyWorkspace({ user, onSignOut }: StudyWorkspaceProps) {
             )}
           </section>
         </div>
+
+        <StudyServiceTools />
       </div>
     </main>
   );

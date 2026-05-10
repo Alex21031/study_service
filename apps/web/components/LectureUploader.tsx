@@ -4,7 +4,7 @@ import { processLectureAudio, transcribeLectureAudio } from "@/lib/lectures";
 import { FormEvent, useEffect, useRef, useState } from "react";
 
 interface LectureUploaderProps {
-  userId: string;
+  onLectureProcessed?: (lectureId: string) => void | Promise<void>;
 }
 
 interface WindowWithWebkitAudioContext extends Window {
@@ -104,7 +104,7 @@ async function convertBlobToWav(blob: Blob) {
   }
 }
 
-export function LectureUploader({ userId }: LectureUploaderProps) {
+export function LectureUploader({ onLectureProcessed }: LectureUploaderProps) {
   const [title, setTitle] = useState("");
   const [courseName, setCourseName] = useState("");
   const [recordedAudio, setRecordedAudio] = useState<Blob | null>(null);
@@ -259,12 +259,12 @@ export function LectureUploader({ userId }: LectureUploaderProps) {
     setSubmitting(true);
 
     try {
-      await processLectureAudio({
-        userId,
+      const lectureId = await processLectureAudio({
         title: title.trim(),
         courseName: courseName.trim(),
         audio: recordedAudio
       });
+      await onLectureProcessed?.(lectureId);
 
       setTitle("");
       setCourseName("");

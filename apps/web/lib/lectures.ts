@@ -1,24 +1,9 @@
 "use client";
 
+import { authenticatedFetch, getApiBaseUrl } from "@/lib/backend";
 import type { KeyTerm, Lecture, QuizQuestion } from "@study-helper/shared/types";
-import {
-  addDoc,
-  collection,
-  doc,
-  onSnapshot,
-  orderBy,
-  query,
-  serverTimestamp,
-  setDoc,
-  where,
-  type DocumentData,
-  type QueryDocumentSnapshot,
-  type Unsubscribe
-} from "firebase/firestore";
-import { getFirebaseServices } from "./firebase";
 
 interface ProcessLectureAudioParams {
-  userId: string;
   title: string;
   courseName: string;
   audio: Blob;
@@ -31,22 +16,47 @@ interface TranscribeLectureAudioParams {
   onTranscriptChunk?: (chunk: TranscriptChunk) => void;
 }
 
-type GeneratedQuizQuestion = Omit<QuizQuestion, "id" | "lectureId" | "createdAt">;
-
-interface ProcessedLectureResponse {
-  audioPath: string;
-  transcript: string;
-  summaryOriginal: string;
-  summaryRussian: string;
-  keyTerms: KeyTerm[];
-  quizzes: GeneratedQuizQuestion[];
-}
-
 interface TranscriptResponse {
   transcript: string;
 }
 
-type TranscriptEndpoint = "/api/lectures/transcribe-audio";
+interface BackendLecture {
+  id: string;
+  userId: number | string;
+  title: string;
+  courseName: string;
+  audioPath: string;
+  status: Lecture["status"];
+  transcript?: string | null;
+  summaryOriginal?: string | null;
+  summaryRussian?: string | null;
+  keyTerms?: KeyTerm[];
+  errorMessage?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface BackendQuiz {
+  id: string;
+  lectureId: string;
+  type: QuizQuestion["type"];
+  question: string;
+  options?: string[] | null;
+  answer: string;
+  explanation: string;
+  difficulty: QuizQuestion["difficulty"];
+  createdAt: string;
+}
+
+interface LectureDetailResponse {
+  lecture: BackendLecture;
+  quizzes: BackendQuiz[];
+}
+
+interface ProcessLectureResponse {
+  lecture: BackendLecture;
+  quizzes: BackendQuiz[];
+}
 
 interface TranscriptChunk {
   index: number;
@@ -67,54 +77,36 @@ type TranscriptStreamEvent =
       error: string;
     };
 
-function timestampToIso(value: unknown) {
-  if (value && typeof value === "object" && "toDate" in value && typeof value.toDate === "function") {
-    return value.toDate().toISOString();
-  }
-
-  return new Date().toISOString();
-}
-
-function toLecture(snapshot: QueryDocumentSnapshot<DocumentData>): Lecture {
-  const data = snapshot.data();
-
+function normalizeLecture(lecture: BackendLecture): Lecture {
   return {
-    id: snapshot.id,
-    userId: data.userId,
-    title: data.title,
-    courseName: data.courseName,
-    audioPath: data.audioPath ?? "",
-    status: data.status,
-    transcript: data.transcript,
-    summaryOriginal: data.summaryOriginal,
-    summaryRussian: data.summaryRussian,
-    keyTerms: (data.keyTerms ?? []) as KeyTerm[],
-    errorMessage: data.errorMessage,
-    createdAt: timestampToIso(data.createdAt),
-    updatedAt: timestampToIso(data.updatedAt)
+    id: lecture.id,
+    userId: String(lecture.userId),
+    title: lecture.title,
+    courseName: lecture.courseName,
+    audioPath: lecture.audioPath,
+    status: lecture.status,
+    transcript: lecture.transcript || undefined,
+    summaryOriginal: lecture.summaryOriginal || undefined,
+    summaryRussian: lecture.summaryRussian || undefined,
+    keyTerms: lecture.keyTerms ?? [],
+    errorMessage: lecture.errorMessage || undefined,
+    createdAt: lecture.createdAt,
+    updatedAt: lecture.updatedAt
   };
 }
 
-function toQuiz(snapshot: QueryDocumentSnapshot<DocumentData>): QuizQuestion {
-  const data = snapshot.data();
-
+function normalizeQuiz(quiz: BackendQuiz): QuizQuestion {
   return {
-    id: snapshot.id,
-    lectureId: data.lectureId,
-    type: data.type,
-    question: data.question,
-    options: data.options,
-    answer: data.answer,
-    explanation: data.explanation,
-    difficulty: data.difficulty,
-    createdAt: timestampToIso(data.createdAt)
+    id: quiz.id,
+    lectureId: quiz.lectureId,
+    type: quiz.type,
+    question: quiz.question,
+    options: quiz.options ?? [],
+    answer: quiz.answer,
+    explanation: quiz.explanation,
+    difficulty: quiz.difficulty,
+    createdAt: quiz.createdAt
   };
-}
-
-function sortLecturesNewestFirst(lectures: Lecture[]) {
-  return lectures.sort(
-    (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
-  );
 }
 
 function audioExtension(type: string) {
@@ -160,13 +152,27 @@ function createAudioFormData(title: string, courseName: string, audio: Blob) {
   return formData;
 }
 
-async function requestTranscript(endpoint: TranscriptEndpoint, title: string, courseName: string, audio: Blob) {
-  const response = await fetch(endpoint, {
+async function parseApiError(response: Response, fallbackMessage: string) {
+  try {
+    const payload = (await response.json()) as {
+      detail?: string;
+      error?: string;
+    };
+
+    return payload.detail || payload.error || fallbackMessage;
+  } catch {
+    return fallbackMessage;
+  }
+}
+
+async function requestTranscript(title: string, courseName: string, audio: Blob) {
+  const response = await fetch(`${getApiBaseUrl()}/lectures/transcribe-audio`, {
     method: "POST",
     body: createAudioFormData(title, courseName, audio)
   });
 
   const payload = (await response.json()) as Partial<TranscriptResponse> & {
+    detail?: string;
     error?: string;
   };
 
@@ -185,23 +191,18 @@ function parseTranscriptStreamLine(line: string) {
 }
 
 async function requestTranscriptStream(
-  endpoint: TranscriptEndpoint,
   title: string,
   courseName: string,
   audio: Blob,
   onTranscriptChunk?: (chunk: TranscriptChunk) => void
 ) {
-  const response = await fetch(`${endpoint}?stream=1`, {
+  const response = await fetch(`${getApiBaseUrl()}/lectures/transcribe-audio?stream=1`, {
     method: "POST",
     body: createAudioFormData(title, courseName, audio)
   });
 
   if (!response.ok) {
-    const payload = (await response.json()) as {
-      error?: string;
-    };
-
-    throw new Error(payload.error || "Lecture transcription failed.");
+    throw new Error(await parseApiError(response, "Lecture transcription failed."));
   }
 
   if (!response.body) {
@@ -262,52 +263,19 @@ async function requestTranscriptStream(
   return finalTranscript;
 }
 
-export async function processLectureAudio({ userId, title, courseName, audio }: ProcessLectureAudioParams) {
-  const { db } = getFirebaseServices();
-  const formData = createAudioFormData(title, courseName, audio);
-
-  formData.set("userId", userId);
-
-  const response = await fetch("/api/lectures/process-audio", {
+export async function processLectureAudio({ title, courseName, audio }: ProcessLectureAudioParams) {
+  const response = await authenticatedFetch("/lectures/process-audio", {
     method: "POST",
-    body: formData
+    body: createAudioFormData(title, courseName, audio)
   });
-
-  const payload = (await response.json()) as Partial<ProcessedLectureResponse> & {
-    error?: string;
-  };
 
   if (!response.ok) {
-    throw new Error(payload.error || "Lecture processing failed.");
+    throw new Error(await parseApiError(response, "Lecture processing failed."));
   }
 
-  const lectureRef = doc(collection(db, "lectures"));
+  const payload = (await response.json()) as ProcessLectureResponse;
 
-  await setDoc(lectureRef, {
-    userId,
-    title,
-    courseName,
-    audioPath: payload.audioPath ?? "",
-    status: "ready",
-    transcript: payload.transcript,
-    summaryOriginal: payload.summaryOriginal,
-    summaryRussian: payload.summaryRussian,
-    keyTerms: payload.keyTerms ?? [],
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp()
-  });
-
-  await Promise.all(
-    (payload.quizzes ?? []).map((quiz) =>
-      addDoc(collection(db, "lectures", lectureRef.id, "quizzes"), {
-        ...quiz,
-        lectureId: lectureRef.id,
-        createdAt: serverTimestamp()
-      })
-    )
-  );
-
-  return lectureRef.id;
+  return payload.lecture.id;
 }
 
 export async function transcribeLectureAudio({
@@ -316,71 +284,44 @@ export async function transcribeLectureAudio({
   audio,
   onTranscriptChunk
 }: TranscribeLectureAudioParams) {
-  const transcript = await requestTranscriptStream(
-    "/api/lectures/transcribe-audio",
-    title,
-    courseName,
-    audio,
-    onTranscriptChunk
-  );
+  const transcript = await requestTranscriptStream(title, courseName, audio, onTranscriptChunk);
 
   if (transcript) {
     return transcript;
   }
 
-  const whisperResult = await requestTranscript("/api/lectures/transcribe-audio", title, courseName, audio);
+  const whisperResult = await requestTranscript(title, courseName, audio);
 
   if (!whisperResult.response.ok) {
-    throw new Error(whisperResult.payload.error || "Lecture transcription failed.");
+    throw new Error(whisperResult.payload.detail || whisperResult.payload.error || "Lecture transcription failed.");
   }
 
   return whisperResult.payload.transcript ?? "";
 }
 
-export function listenToLectures(
-  userId: string,
-  onChange: (lectures: Lecture[]) => void,
-  onError: (error: Error) => void
-): Unsubscribe {
-  const { db } = getFirebaseServices();
-  const lecturesQuery = query(collection(db, "lectures"), where("userId", "==", userId));
+export async function fetchLectures() {
+  const response = await authenticatedFetch("/lectures");
 
-  return onSnapshot(
-    lecturesQuery,
-    (snapshot) => onChange(sortLecturesNewestFirst(snapshot.docs.map(toLecture))),
-    (error) => onError(error)
-  );
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "강의 목록을 불러오지 못했습니다."));
+  }
+
+  const payload = (await response.json()) as BackendLecture[];
+
+  return payload.map(normalizeLecture);
 }
 
-export function listenToQuizzes(
-  lectureId: string,
-  onChange: (quizzes: QuizQuestion[]) => void,
-  onError: (error: Error) => void
-): Unsubscribe {
-  const { db } = getFirebaseServices();
-  const quizzesQuery = query(
-    collection(db, "lectures", lectureId, "quizzes"),
-    orderBy("createdAt", "asc")
-  );
+export async function fetchLectureDetail(lectureId: string) {
+  const response = await authenticatedFetch(`/lectures/${lectureId}`);
 
-  return onSnapshot(
-    quizzesQuery,
-    (snapshot) => onChange(snapshot.docs.map(toQuiz)),
-    (error) => onError(error)
-  );
-}
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, "강의 상세 정보를 불러오지 못했습니다."));
+  }
 
-export async function createUserProfile(userId: string, displayName: string, email: string) {
-  const { db } = getFirebaseServices();
+  const payload = (await response.json()) as LectureDetailResponse;
 
-  await setDoc(
-    doc(db, "users", userId),
-    {
-      displayName,
-      email,
-      nativeLanguage: "ru",
-      createdAt: serverTimestamp()
-    },
-    { merge: true }
-  );
+  return {
+    lecture: normalizeLecture(payload.lecture),
+    quizzes: payload.quizzes.map(normalizeQuiz)
+  };
 }
